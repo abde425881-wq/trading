@@ -1,0 +1,206 @@
+import os
+import telebot
+import firebase_admin
+from firebase_admin import credentials, firestore
+from flask import Flask, request
+import json
+from datetime import datetime
+
+# Configurazione
+TOKEN = os.getenv('BOT_TOKEN')
+RENDER_URL = os.getenv('RENDER_URL')
+app = Flask(__name__)
+
+# Inizializza Firebase
+firebase_json = os.getenv('FIREBASE_CONFIG')
+if firebase_json:
+    try:
+        cred_dict = json.loads(firebase_json)
+        cred = credentials.Certificate(cred_dict)
+    except:
+        cred = credentials.Certificate("firebase_config.json")
+else:
+    cred = credentials.Certificate("firebase_config.json")
+
+firebase_admin.initialize_app(cred)
+db = firestore.client()
+
+bot = telebot.TeleBot(TOKEN)
+
+# ID Admin principale (il tuo ID Telegram)
+ADMIN_ID = os.getenv('ADMIN_ID', '')
+
+def is_admin(user_id):
+    if str(user_id) == str(ADMIN_ID):
+        return True
+    admins_ref = db.collection('admins').document(str(user_id)).get()
+    return admins_ref.exists
+
+# ========== COMANDI UTENTE ==========
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    markup = telebot.types.InlineKeyboardMarkup()
+    markup.row(telebot.types.InlineKeyboardButton("📋 Visualizza Menu", callback_data="show_menu"))
+    markup.row(telebot.types.InlineKeyboardButton("📞 Prenota Tavolo", callback_data="book_table"))
+    
+    welcome_text = """🍹 *Benvenuto al Bar Caldarelli!*
+
+Cosa posso fare per te?"""
+    
+    bot.reply_to(message, welcome_text, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "show_menu")
+def show_menu(call):
+    categories = db.collection('categories').stream()
+    markup = telebot.types.InlineKeyboardMarkup()
+    
+    for cat in categories:
+        cat_data = cat.to_dict()
+        markup.row(telebot.types.InlineKeyboardButton(
+            f"📂 {cat.id}", 
+            callback_data=f"cat_{cat.id}"
+        ))
+    
+    markup.row(telebot.types.InlineKeyboardButton("🔙 Indietro", callback_data="back_start"))
+    bot.edit_message_text("📋 Seleziona una categoria:", 
+                          call.message.chat.id, 
+                          call.message.message_id,
+                          reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("cat_"))
+def show_products(call):
+    category = call.data.replace("cat_", "")
+    products = db.collection('products').where('category', '==', category).stream()
+    
+    text = f"🍽️ *{category}*\n\n"
+    markup = telebot.types.InlineKeyboardMarkup()
+    
+    for prod in products:
+        prod_data = prod.to_dict()
+        text += f"• *{prod_data['name']}* - €{prod_data['price']}\n"
+        markup.row(telebot.types.InlineKeyboardButton(
+            f"🛒 Aggiungi {prod_data['name']}",
+            callback_data=f"add_{prod.id}"
+        ))
+    
+    markup.row(telebot.types.InlineKeyboardButton("🔙 Indietro", callback_data="show_menu"))
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, 
+                          parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "book_table")
+def book_table(call):
+    text = """📞 *Prenota un Tavolo*
+
+Chiama il numero: +39 123 456 7890
+Oppure invia una richiesta qui con il comando /prenota"""
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == "back_start")
+def back_start(call):
+    markup = telebot.types.InlineKeyboardMarkup()
+    markup.row(telebot.types.InlineKeyboardButton("📋 Visualizza Menu", callback_data="show_menu"))
+    markup.row(telebot.types.InlineKeyboardButton("📞 Prenota Tavolo", callback_data="book_table"))
+    
+    bot.edit_message_text("🍹 *Benvenuto al Bar Caldarelli!*\n\nCosa posso fare per te?", 
+                          call.message.chat.id, 
+                          call.message.message_id,
+                          parse_mode='Markdown', reply_markup=markup)
+
+# ========== COMANDI ADMIN ==========
+
+@bot.message_handler(commands=['admin'])
+def admin_panel(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "❌ Non sei autorizzato!")
+        return
+    
+    markup = telebot.types.InlineKeyboardMarkup()
+    markup.row(telebot.types.InlineKeyboardButton("➕ Aggiungi Categoria", callback_data="add_cat"))
+    markup.row(telebot.types.InlineKeyboardButton("➕ Aggiungi Prodotto", callback_data="add_prod"))
+    markup.row(telebot.types.InlineKeyboardButton("➕ Aggiungi Admin", callback_data="add_admin"))
+    markup.row(telebot.types.InlineKeyboardButton("📊 Statistiche", callback_data="stats"))
+    
+    bot.reply_to(message, "🔐 *Pannello Admin*\n\nSeleziona un'azione:", 
+                 parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "add_cat")
+def add_category(call):
+    if not is_admin(call.from_user.id):
+        return
+    msg = bot.send_message(call.message.chat.id, "Invia il nome della nuova categoria:")
+    bot.register_next_step_handler(msg, process_category)
+
+def process_category(message):
+    if not is_admin(message.from_user.id):
+        return
+    cat_name = message.text
+    db.collection('categories').document(cat_name).set({'created': datetime.now()})
+    bot.reply_to(message, f"✅ Categoria *{cat_name}* aggiunta!", parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == "add_prod")
+def add_product(call):
+    if not is_admin(call.from_user.id):
+        return
+    msg = bot.send_message(call.message.chat.id, 
+                          "Invia: NOME | PREZZO | CATEGORIA\nEsempio: Spritz Aperol | 5.00 | Aperitivi")
+    bot.register_next_step_handler(msg, process_product)
+
+def process_product(message):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        parts = message.text.split('|')
+        name = parts[0].strip()
+        price = float(parts[1].strip())
+        category = parts[2].strip()
+        
+        db.collection('products').add({
+            'name': name,
+            'price': price,
+            'category': category,
+            'created': datetime.now()
+        })
+        bot.reply_to(message, f"✅ Prodotto *{name}* aggiunto!", parse_mode='Markdown')
+    except:
+        bot.reply_to(message, "❌ Formato errato. Usa: NOME | PREZZO | CATEGORIA")
+
+@bot.callback_query_handler(func=lambda call: call.data == "add_admin")
+def add_admin(call):
+    if not is_admin(call.from_user.id):
+        return
+    msg = bot.send_message(call.message.chat.id, "Invia l'ID Telegram del nuovo admin:")
+    bot.register_next_step_handler(msg, process_admin)
+
+def process_admin(message):
+    if not is_admin(message.from_user.id):
+        return
+    new_admin_id = message.text.strip()
+    db.collection('admins').document(new_admin_id).set({'added_by': message.from_user.id})
+    bot.reply_to(message, f"✅ Admin *{new_admin_id}* aggiunto!", parse_mode='Markdown')
+
+# ========== WEBHOOK (PER RENDER) ==========
+
+@app.route('/' + TOKEN, methods=['POST'])
+def webhook():
+    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+    bot.process_new_updates([update])
+    return "ok", 200
+
+@app.route("/")
+def index():
+    return "🤖 Bot Caldarelli Online!", 200
+
+if __name__ == "__main__":
+    # Imposta webhook
+    bot.remove_webhook()
+    if RENDER_URL:
+        bot.set_webhook(url=RENDER_URL + '/' + TOKEN)
+        print(f"Webhook impostato: {RENDER_URL}/{TOKEN}")
+    else:
+        print("ATTENZIONE: RENDER_URL non impostato!")
+    
+    # Avvia Flask
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
