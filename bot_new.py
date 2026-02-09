@@ -2,17 +2,16 @@ import os
 import telebot
 import firebase_admin
 from firebase_admin import credentials, firestore
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask, request
 import json
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# ========== CONFIGURAZIONE ==========
+# ========== CONFIGURAZIONE RENDER ==========
 TOKEN = os.getenv('BOT_TOKEN')
-RENDER_URL = os.getenv('RENDER_URL')
-
-# Fallback se non trova variabili
 if not TOKEN:
     TOKEN = "8396839304:AAHLBwLsSPbZPaz0i31C_TtQBUHQmjr1MJU"
+
+RENDER_URL = os.getenv('RENDER_URL')
 
 app = Flask(__name__)
 
@@ -33,515 +32,377 @@ except Exception as e:
     db = None
 
 bot = telebot.TeleBot(TOKEN)
-user_states = {}  # Per gestire input multi-step
+user_states = {}
 
-# ========== FUNZIONI HELPER ==========
+# ============ TUTTE LE TUE FUNZIONI (INVARIATE) ============
+
 def is_admin(user_id):
-    """Controlla se l'utente è admin"""
+    """Controlla se l'utente è admin. Se non ci sono admin, il primo diventa admin."""
     if not db:
         return False
-    try:
-        # Controlla se è l'admin principale (primo utente che usa /admin)
-        admins_ref = db.collection('admins').document(str(user_id)).get()
-        return admins_ref.exists
-    except:
+    ref = db.collection('menu').document('caldarelli')
+    doc = ref.get()
+    if not doc.exists:
         return False
+    
+    data = doc.to_dict()
+    admins = data.get('admins', [])
+    
+    if not admins:
+        data['admins'] = [user_id]
+        ref.set(data)
+        return True
+    
+    return user_id in admins
 
-def get_main_admin():
-    """Restituisce l'ID del primo admin"""
+def add_admin_to_db(new_admin_id):
+    """Aggiunge un nuovo admin al database"""
     if not db:
-        return None
-    try:
-        admins = db.collection('admins').limit(1).get()
-        for admin in admins:
-            return admin.id
-    except:
-        return None
-    return None
-
-# ========== COMANDI CLIENTE ==========
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("📋 Visualizza Menu", callback_data="menu_principale"))
-    markup.row(InlineKeyboardButton("📞 Prenota Tavolo", callback_data="prenota"))
-    markup.row(InlineKeyboardButton("ℹ️ Info", callback_data="info"))
+        return False
+    ref = db.collection('menu').document('caldarelli')
+    doc = ref.get()
+    if not doc.exists:
+        return False
     
-    welcome_text = """🍹 *Benvenuto al Bar Caldarelli!*
-
-Cosa posso fare per te?"""
+    data = doc.to_dict()
+    admins = data.get('admins', [])
     
-    bot.reply_to(message, welcome_text, parse_mode='Markdown', reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data == "menu_principale")
-def menu_principale(call):
-    """Mostra tutte le categorie"""
-    if not db:
-        bot.answer_callback_query(call.id, "⚠️ Database non disponibile")
-        return
+    if new_admin_id in admins:
+        return False
     
-    try:
-        categories = db.collection('categories').stream()
-        markup = InlineKeyboardMarkup()
-        
-        for cat in categories:
-            cat_data = cat.to_dict()
-            nome = cat_data.get('nome', cat.id)
-            markup.row(InlineKeyboardButton(f"📂 {nome}", callback_data=f"cat_{cat.id}"))
-        
-        markup.row(InlineKeyboardButton("🔙 Indietro", callback_data="back_start"))
-        
-        bot.edit_message_text("📋 *Menu Caldarelli*\n\nScegli una categoria:", 
-                              call.message.chat.id, 
-                              call.message.message_id,
-                              parse_mode='Markdown', reply_markup=markup)
-    except Exception as e:
-        print(f"Errore menu: {e}")
-        bot.answer_callback_query(call.id, "⚠️ Errore caricamento menu")
+    admins.append(new_admin_id)
+    data['admins'] = admins
+    ref.set(data)
+    return True
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("cat_"))
-def mostra_prodotti(call):
-    """Mostra i prodotti di una categoria"""
-    if not db:
-        return
-    
-    cat_id = call.data.replace("cat_", "")
-    
-    try:
-        # Prendi nome categoria
-        cat_ref = db.collection('categories').document(cat_id).get()
-        cat_nome = cat_ref.to_dict().get('nome', cat_id) if cat_ref.exists else cat_id
-        
-        # Prendi prodotti
-        products = db.collection('prodotti').where('categoria', '==', cat_id).stream()
-        
-        text = f"🍽️ *{cat_nome}*\n\n"
-        markup = InlineKeyboardMarkup()
-        
-        for prod in products:
-            prod_data = prod.to_dict()
-            nome = prod_data.get('nome', 'Sconosciuto')
-            prezzo = prod_data.get('prezzo', 0)
-            text += f"• *{nome}* - €{prezzo:.2f}\n"
-            markup.row(InlineKeyboardButton(f"🛒 {nome}", callback_data=f"prod_{prod.id}"))
-        
-        if text == f"🍽️ *{cat_nome}*\n\n":
-            text += "_Nessun prodotto disponibile_"
-        
-        markup.row(InlineKeyboardButton("🔙 Indietro", callback_data="menu_principale"))
-        
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                              parse_mode='Markdown', reply_markup=markup)
-    except Exception as e:
-        print(f"Errore prodotti: {e}")
-        bot.answer_callback_query(call.id, "⚠️ Errore caricamento prodotti")
-
-@bot.callback_query_handler(func=lambda call: call.data == "prenota")
-def prenota_tavolo(call):
-    """Prenotazione tavolo"""
-    text = """📞 *Prenota un Tavolo*
-
-Chiama il numero: +39 123 456 7890
-Oppure invia una richiesta qui."""
-    
-    bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
-
-@bot.callback_query_handler(func=lambda call: call.data == "info")
-def info_bar(call):
-    """Info del bar"""
-    text = """ *Bar Caldarelli*
-
-📍 Indirizzo: Via Roma 123
-📞 Telefono: +39 123 456 7890
-🕐 Orari: 08:00 - 02:00
-
-Benvenuti!"""
-    
-    bot.answer_callback_query(call.id)
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                          parse_mode='Markdown', reply_markup=InlineKeyboardMarkup().row(
-                              InlineKeyboardButton("🔙 Indietro", callback_data="back_start")))
-
-@bot.callback_query_handler(func=lambda call: call.data == "back_start")
-def back_to_start(call):
-    """Torna alla home"""
-    markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("📋 Visualizza Menu", callback_data="menu_principale"))
-    markup.row(InlineKeyboardButton("📞 Prenota Tavolo", callback_data="prenota"))
-    markup.row(InlineKeyboardButton("ℹ️ Info", callback_data="info"))
-    
-    bot.edit_message_text("🍹 *Benvenuto al Bar Caldarelli!*\n\nCosa posso fare per te?", 
-                          call.message.chat.id, 
-                          call.message.message_id,
-                          parse_mode='Markdown', reply_markup=markup)
-
-# ========== PANNELLO ADMIN ==========
-@bot.message_handler(commands=['admin'])
-def admin_panel(message):
-    """Pannello admin"""
-    user_id = message.from_user.id
-    
-    # Se non ci sono admin, il primo che usa /admin diventa admin
-    if not db:
-        bot.reply_to(message, "❌ Database non disponibile")
-        return
-    
-    try:
-        admins = list(db.collection('admins').limit(1).get())
-        if not admins:
-            # Primo admin
-            db.collection('admins').document(str(user_id)).set({
-                'username': message.from_user.username,
-                'created': firestore.SERVER_TIMESTAMP
-            })
-            bot.reply_to(message, "🔐 *Sei stato registrato come Admin principale!*", parse_mode='Markdown')
-        elif not is_admin(user_id):
-            bot.reply_to(message, "❌ Non sei autorizzato!")
-            return
-        
-        # Mostra pannello
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.row(
-            InlineKeyboardButton("➕ Categoria", callback_data="add_cat"),
-            InlineKeyboardButton("➕ Prodotto", callback_data="add_prod")
-        )
-        markup.row(
-            InlineKeyboardButton("🗑️ Rimuovi", callback_data="remove_item"),
-            InlineKeyboardButton("📊 Lista Admin", callback_data="list_admin")
-        )
-        markup.row(InlineKeyboardButton("➕ Aggiungi Admin", callback_data="add_admin"))
-        
-        bot.reply_to(message, "🔐 *Pannello Admin*\n\nSeleziona un'azione:", 
-                     parse_mode='Markdown', reply_markup=markup)
-    except Exception as e:
-        print(f"Errore admin panel: {e}")
-        bot.reply_to(message, "❌ Errore nel caricamento pannello")
-
-# ========== GESTIONE CATEGORIE ==========
-@bot.callback_query_handler(func=lambda call: call.data == "add_cat")
-def add_category_start(call):
-    """Inizia aggiunta categoria"""
-    if not is_admin(call.from_user.id):
-        bot.answer_callback_query(call.id, "❌ Non autorizzato")
-        return
-    
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, 
-                          "Inserisci il nome della nuova categoria:\n\n(Scrivi /cancel per annullare)")
-    user_states[call.from_user.id] = {'action': 'add_category'}
-
-@bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('action') == 'add_category')
-def add_category_execute(message):
-    """Esegue aggiunta categoria"""
-    if message.text == '/cancel':
-        user_states.pop(message.from_user.id, None)
-        bot.reply_to(message, "❌ Operazione annullata")
-        return
-    
-    try:
-        cat_name = message.text.strip()
-        db.collection('categories').document(cat_name.lower().replace(' ', '_')).set({
-            'nome': cat_name,
-            'created': firestore.SERVER_TIMESTAMP
-        })
-        bot.reply_to(message, f"✅ Categoria *{cat_name}* aggiunta!", parse_mode='Markdown')
-    except Exception as e:
-        bot.reply_to(message, f"❌ Errore: {e}")
-    finally:
-        user_states.pop(message.from_user.id, None)
-
-# ========== GESTIONE PRODOTTI ==========
-@bot.callback_query_handler(func=lambda call: call.data == "add_prod")
-def add_product_start(call):
-    """Inizia aggiunta prodotto"""
-    if not is_admin(call.from_user.id):
-        bot.answer_callback_query(call.id, "❌ Non autorizzato")
-        return
-    
-    try:
-        # Mostra categorie disponibili
-        categories = db.collection('categories').stream()
-        markup = InlineKeyboardMarkup()
-        
-        for cat in categories:
-            cat_data = cat.to_dict()
-            nome = cat_data.get('nome', cat.id)
-            markup.row(InlineKeyboardButton(nome, callback_data=f"selcat_{cat.id}"))
-        
-        markup.row(InlineKeyboardButton("❌ Annulla", callback_data="cancel_action"))
-        
-        bot.edit_message_text("Seleziona la categoria per il nuovo prodotto:",
-                              call.message.chat.id, call.message.message_id,
-                              reply_markup=markup)
-    except Exception as e:
-        bot.answer_callback_query(call.id, f"Errore: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("selcat_"))
-def select_category_for_product(call):
-    """Seleziona categoria e chiede nome prodotto"""
-    cat_id = call.data.replace("selcat_", "")
-    user_states[call.from_user.id] = {'action': 'add_product', 'category': cat_id}
-    
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, 
-                          "Inserisci nome e prezzo del prodotto nel formato:\n"
-                          "*Nome Prodotto | Prezzo*\n\n"
-                          "Esempio: Spritz Aperol | 5.00\n\n"
-                          "(Scrivi /cancel per annullare)",
-                          parse_mode='Markdown')
-
-@bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('action') == 'add_product')
-def add_product_execute(message):
-    """Esegue aggiunta prodotto"""
-    if message.text == '/cancel':
-        user_states.pop(message.from_user.id, None)
-        bot.reply_to(message, "❌ Operazione annullata")
-        return
-    
-    try:
-        parts = message.text.split('|')
-        if len(parts) != 2:
-            raise ValueError("Formato errato")
-        
-        nome = parts[0].strip()
-        prezzo = float(parts[1].strip())
-        cat_id = user_states[message.from_user.id]['category']
-        
-        # Prendi nome categoria
-        cat_ref = db.collection('categories').document(cat_id).get()
-        cat_nome = cat_ref.to_dict().get('nome', cat_id) if cat_ref.exists else cat_id
-        
-        db.collection('prodotti').add({
-            'nome': nome,
-            'prezzo': prezzo,
-            'categoria': cat_id,
-            'categoria_nome': cat_nome,
-            'created': firestore.SERVER_TIMESTAMP
-        })
-        
-        bot.reply_to(message, f"✅ Prodotto *{nome}* (€{prezzo:.2f}) aggiunto a *{cat_nome}*!", 
-                     parse_mode='Markdown')
-    except ValueError:
-        bot.reply_to(message, "❌ Formato errato! Usa: Nome | Prezzo\nEsempio: Spritz | 5.00")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Errore: {e}")
-    finally:
-        user_states.pop(message.from_user.id, None)
-
-# ========== RIMOZIONE ==========
-@bot.callback_query_handler(func=lambda call: call.data == "remove_item")
-def remove_menu(call):
-    """Menu rimozione"""
-    if not is_admin(call.from_user.id):
-        return
-    
-    markup = InlineKeyboardMarkup()
-    markup.row(
-        InlineKeyboardButton("🗑️ Categoria", callback_data="rem_cat_sel"),
-        InlineKeyboardButton("🗑️ Prodotto", callback_data="rem_prod_sel")
-    )
-    markup.row(InlineKeyboardButton("🔙 Indietro", callback_data="back_admin"))
-    
-    bot.edit_message_text("Cosa vuoi rimuovere?", call.message.chat.id, call.message.message_id,
-                          reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data == "rem_prod_sel")
-def remove_product_select(call):
-    """Seleziona prodotto da rimuovere"""
-    try:
-        products = db.collection('prodotti').stream()
-        markup = InlineKeyboardMarkup()
-        
-        for prod in products:
-            prod_data = prod.to_dict()
-            nome = prod_data.get('nome', 'Sconosciuto')
-            markup.row(InlineKeyboardButton(f"🗑️ {nome}", callback_data=f"delprod_{prod.id}"))
-        
-        markup.row(InlineKeyboardButton("🔙 Indietro", callback_data="remove_item"))
-        
-        bot.edit_message_text("Seleziona il prodotto da rimuovere:", 
-                              call.message.chat.id, call.message.message_id,
-                              reply_markup=markup)
-    except Exception as e:
-        bot.answer_callback_query(call.id, f"Errore: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("delprod_"))
-def delete_product(call):
-    """Cancella prodotto"""
-    prod_id = call.data.replace("delprod_", "")
-    try:
-        db.collection('prodotti').document(prod_id).delete()
-        bot.answer_callback_query(call.id, "✅ Prodotto rimosso!")
-        remove_product_select(call)  # Ricarica lista
-    except Exception as e:
-        bot.answer_callback_query(call.id, f"❌ Errore: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data == "rem_cat_sel")
-def remove_category_select(call):
-    """Seleziona categoria da rimuovere"""
-    try:
-        categories = db.collection('categories').stream()
-        markup = InlineKeyboardMarkup()
-        
-        for cat in categories:
-            cat_data = cat.to_dict()
-            nome = cat_data.get('nome', cat.id)
-            markup.row(InlineKeyboardButton(f"🗑️ {nome}", callback_data=f"delcat_{cat.id}"))
-        
-        markup.row(InlineKeyboardButton("🔙 Indietro", callback_data="remove_item"))
-        
-        bot.edit_message_text("⚠️ Attenzione: rimuovendo una categoria, rimuovi anche tutti i suoi prodotti!\n\n"
-                              "Seleziona la categoria da rimuovere:", 
-                              call.message.chat.id, call.message.message_id,
-                              reply_markup=markup)
-    except Exception as e:
-        bot.answer_callback_query(call.id, f"Errore: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("delcat_"))
-def delete_category(call):
-    """Cancella categoria e tutti i suoi prodotti"""
-    cat_id = call.data.replace("delcat_", "")
-    try:
-        # Rimuovi prodotti della categoria
-        products = db.collection('prodotti').where('categoria', '==', cat_id).get()
-        for prod in products:
-            prod.reference.delete()
-        
-        # Rimuovi categoria
-        db.collection('categories').document(cat_id).delete()
-        
-        bot.answer_callback_query(call.id, "✅ Categoria e prodotti rimossi!")
-        bot.edit_message_text("🔐 *Pannello Admin*", call.message.chat.id, call.message.message_id,
-                              parse_mode='Markdown', reply_markup=admin_markup(call))
-    except Exception as e:
-        bot.answer_callback_query(call.id, f"❌ Errore: {e}")
-
-def admin_markup(call):
-    """Ricrea markup admin"""
+def menu(user_id):
     markup = InlineKeyboardMarkup(row_width=2)
-    markup.row(
-        InlineKeyboardButton("➕ Categoria", callback_data="add_cat"),
-        InlineKeyboardButton("➕ Prodotto", callback_data="add_prod")
-    )
-    markup.row(
-        InlineKeyboardButton("🗑️ Rimuovi", callback_data="remove_item"),
-        InlineKeyboardButton("📊 Lista Admin", callback_data="list_admin")
-    )
-    markup.row(InlineKeyboardButton("➕ Aggiungi Admin", callback_data="add_admin"))
+    buttons = [InlineKeyboardButton("📋 Visualizza Menu", callback_data="list")]
+    
+    if is_admin(user_id):
+        buttons.extend([
+            InlineKeyboardButton("➕ Categoria", callback_data="add_cat"),
+            InlineKeyboardButton("📝 Prodotto", callback_data="add_prod"),
+            InlineKeyboardButton("❌ Rimuovi Prodotto", callback_data="rem_prod"),
+            InlineKeyboardButton("👤 Gestione Admin", callback_data="admin_menu")
+        ])
+    
+    markup.add(*buttons)
     return markup
 
-@bot.callback_query_handler(func=lambda call: call.data == "back_admin")
-def back_admin(call):
-    """Torna a pannello admin"""
-    if not is_admin(call.from_user.id):
-        return
-    bot.edit_message_text("🔐 *Pannello Admin*\n\nSeleziona un'azione:", 
-                          call.message.chat.id, call.message.message_id,
-                          parse_mode='Markdown', reply_markup=admin_markup(call))
+def admin_menu():
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("➕ Aggiungi Admin", callback_data="add_admin"),
+        InlineKeyboardButton("📋 Lista Admin", callback_data="list_admin"),
+        InlineKeyboardButton("🔙 Indietro", callback_data="back")
+    )
+    return markup
 
-# ========== GESTIONE ADMIN ==========
-@bot.callback_query_handler(func=lambda call: call.data == "add_admin")
-def add_admin_start(call):
-    """Inizia aggiunta admin"""
-    if not is_admin(call.from_user.id):
+def show_cats(chat_id, mode):
+    """Mostra le categorie per aggiungere o rimuovere prodotti"""
+    if not db:
+        return
+    ref = db.collection('menu').document('caldarelli')
+    doc = ref.get()
+    if not doc.exists:
+        bot.send_message(chat_id, "❌ Nessuna categoria trovata. Crea prima una categoria!")
         return
     
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, 
-                          "Inserisci l'ID Telegram del nuovo admin:\n\n"
-                          "(Puoi ottenere l'ID da @userinfobot)\n"
-                          "Scrivi /cancel per annullare")
-    user_states[call.from_user.id] = {'action': 'add_admin'}
+    data = doc.to_dict()
+    cats = data.get('categorie', {})
+    
+    if not cats:
+        bot.send_message(chat_id, "❌ Nessuna categoria disponibile.")
+        return
+    
+    markup = InlineKeyboardMarkup()
+    for cat_name in cats:
+        if mode == "add":
+            cb = f"a_{cat_name}"
+            text = f"➕ {cat_name}"
+        else:
+            cb = f"r_{cat_name}"
+            prod_count = len(cats[cat_name])
+            text = f"❌ {cat_name} ({prod_count} prodotti)"
+        markup.add(InlineKeyboardButton(text, callback_data=cb))
+    
+    markup.add(InlineKeyboardButton("🔙 Indietro", callback_data="back"))
+    action_text = "aggiungere" if mode == "add" else "rimuovere da"
+    bot.send_message(chat_id, f"Scegli categoria per {action_text}:", reply_markup=markup)
 
-@bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('action') == 'add_admin')
-def add_admin_execute(message):
-    """Aggiunge admin"""
-    if message.text == '/cancel':
-        user_states.pop(message.from_user.id, None)
-        bot.reply_to(message, "❌ Operazione annullata")
+# ============ HANDLERS (TUTTI INVARIATI) ============
+
+@bot.message_handler(commands=['start'])
+def start(m):
+    user_id = m.from_user.id
+    
+    if db:
+        ref = db.collection('menu').document('caldarelli')
+        doc = ref.get()
+        if doc.exists:
+            data = doc.to_dict()
+            if not data.get('admins', []):
+                bot.send_message(m.chat.id, "👑 *Sei il primo admin!* Autorizzazione automatica concessa.", parse_mode="Markdown")
+    
+    bot.send_message(m.chat.id, "🍸 *Caldarelli Bot*\nGestione menu digitale", parse_mode="Markdown", reply_markup=menu(user_id))
+
+@bot.callback_query_handler(func=lambda c: c.data == "admin_menu")
+def show_admin_menu(c):
+    if not is_admin(c.from_user.id):
+        bot.answer_callback_query(c.id, "⛔ Non sei autorizzato!")
+        return
+    bot.edit_message_text("👤 *Gestione Admin*", 
+                         chat_id=c.message.chat.id, 
+                         message_id=c.message.message_id,
+                         parse_mode="Markdown",
+                         reply_markup=admin_menu())
+
+@bot.callback_query_handler(func=lambda c: c.data == "add_admin")
+def request_add_admin(c):
+    if not is_admin(c.from_user.id):
+        bot.answer_callback_query(c.id, "⛔ Non sei autorizzato!")
+        return
+    msg = bot.send_message(c.message.chat.id, 
+        "👤 *Aggiungi Nuovo Admin*\n\nInoltra un messaggio del nuovo admin (deve aver avviato il bot)\nOppure scrivi l'ID utente numerico.",
+        parse_mode="Markdown")
+    user_states[c.message.chat.id] = {'action': 'add_admin'}
+    bot.register_next_step_handler(msg, process_new_admin)
+
+def process_new_admin(m):
+    chat_id = m.chat.id
+    user_id = m.from_user.id
+    
+    if not is_admin(user_id):
+        bot.send_message(chat_id, "⛔ Non sei più admin!")
+        return
+    
+    new_admin_id = None
+    if m.forward_from:
+        new_admin_id = m.forward_from.id
+        name = m.forward_from.first_name
+    elif m.text and m.text.isdigit():
+        new_admin_id = int(m.text)
+        name = f"ID {new_admin_id}"
+    else:
+        bot.send_message(chat_id, "❌ Formato non valido.", reply_markup=menu(user_id))
+        return
+    
+    if new_admin_id == user_id:
+        bot.send_message(chat_id, "❌ Sei già admin!", reply_markup=menu(user_id))
+        return
+    
+    if add_admin_to_db(new_admin_id):
+        bot.send_message(chat_id, f"✅ *{name}* aggiunto come admin!", parse_mode="Markdown", reply_markup=menu(user_id))
+        try:
+            bot.send_message(new_admin_id, "🎉 *Sei stato promosso ad admin* del bot Caldarelli!", parse_mode="Markdown")
+        except:
+            pass
+    else:
+        bot.send_message(chat_id, "⚠️ Utente già admin o errore database.", reply_markup=menu(user_id))
+
+@bot.callback_query_handler(func=lambda c: c.data == "list_admin")
+def list_admins(c):
+    if not is_admin(c.from_user.id):
+        bot.answer_callback_query(c.id, "⛔ Non sei autorizzato!")
+        return
+    
+    if not db:
+        return
+    ref = db.collection('menu').document('caldarelli')
+    doc = ref.get()
+    if not doc.exists:
+        return
+    
+    admins = doc.to_dict().get('admins', [])
+    text = "👤 *Admin registrati:*\n\n"
+    
+    for admin_id in admins:
+        try:
+            chat = bot.get_chat(admin_id)
+            name = chat.first_name or "Sconosciuto"
+            username = f" @{chat.username}" if chat.username else ""
+            text += f"• {name}{username} (`{admin_id}`)\n"
+        except:
+            text += f"• ID: `{admin_id}`\n"
+    
+    bot.send_message(c.message.chat.id, text, parse_mode="Markdown", reply_markup=admin_menu())
+
+@bot.callback_query_handler(func=lambda c: c.data == "add_cat")
+def add_cat(c):
+    if not is_admin(c.from_user.id):
+        bot.answer_callback_query(c.id, "⛔ Solo admin!")
+        return
+    msg = bot.send_message(c.message.chat.id, "Nome nuova categoria:")
+    bot.register_next_step_handler(msg, save_cat)
+
+def save_cat(m):
+    if not is_admin(m.from_user.id):
+        bot.send_message(m.chat.id, "⛔ Non autorizzato!")
+        return
+    
+    cat = m.text
+    if not db:
+        return
+    ref = db.collection('menu').document('caldarelli')
+    doc = ref.get()
+    data = doc.to_dict() if doc.exists else {}
+    if 'categorie' not in data: 
+        data['categorie'] = {}
+    if 'admins' not in data:
+        data['admins'] = [m.from_user.id]
+    
+    data['categorie'][cat] = []
+    ref.set(data)
+    bot.send_message(m.chat.id, f"✅ Categoria *{cat}* creata!", parse_mode="Markdown", reply_markup=menu(m.from_user.id))
+
+@bot.callback_query_handler(func=lambda c: c.data == "add_prod")
+def add_prod(c):
+    if not is_admin(c.from_user.id):
+        bot.answer_callback_query(c.id, "⛔ Solo admin!")
+        return
+    show_cats(c.message.chat.id, "add")
+
+@bot.callback_query_handler(func=lambda c: c.data == "rem_prod")
+def rem_prod(c):
+    if not is_admin(c.from_user.id):
+        bot.answer_callback_query(c.id, "⛔ Solo admin!")
+        return
+    show_cats(c.message.chat.id, "rem")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("a_"))
+def sel_add(c):
+    if not is_admin(c.from_user.id):
+        bot.answer_callback_query(c.id, "⛔ Solo admin!")
+        return
+    cat = c.data[2:]
+    user_states[c.message.chat.id] = {'cat': cat}
+    msg = bot.send_message(c.message.chat.id, f"Nome prodotto per *{cat}*:", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, ask_price)
+
+def ask_price(m):
+    if not is_admin(m.from_user.id):
+        bot.send_message(m.chat.id, "⛔ Non autorizzato!")
+        return
+    user_states[m.chat.id]['name'] = m.text
+    msg = bot.send_message(m.chat.id, "Prezzo (es: 4.50):")
+    bot.register_next_step_handler(msg, save_prod)
+
+def save_prod(m):
+    if not is_admin(m.from_user.id):
+        bot.send_message(m.chat.id, "⛔ Non autorizzato!")
         return
     
     try:
-        new_admin_id = message.text.strip()
-        db.collection('admins').document(new_admin_id).set({
-            'added_by': message.from_user.id,
-            'created': firestore.SERVER_TIMESTAMP
-        })
-        bot.reply_to(message, f"✅ Admin *{new_admin_id}* aggiunto!", parse_mode='Markdown')
+        price = float(m.text.replace(',', '.'))
+        chat = m.chat.id
+        cat = user_states[chat]['cat']
+        name = user_states[chat]['name']
+        
+        if not db:
+            return
+        ref = db.collection('menu').document('caldarelli')
+        doc = ref.get()
+        data = doc.to_dict()
+        data['categorie'][cat].append({'nome': name, 'prezzo': price})
+        ref.set(data)
+        bot.send_message(chat, f"✅ *{name}* aggiunto a *{cat}*!", parse_mode="Markdown", reply_markup=menu(m.from_user.id))
+        del user_states[chat]
     except Exception as e:
-        bot.reply_to(message, f"❌ Errore: {e}")
-    finally:
-        user_states.pop(message.from_user.id, None)
+        bot.send_message(m.chat.id, "❌ Errore prezzo. Usa il formato: 4.50")
 
-@bot.callback_query_handler(func=lambda call: call.data == "list_admin")
-def list_admins(call):
-    """Mostra lista admin"""
-    if not is_admin(call.from_user.id):
+@bot.callback_query_handler(func=lambda c: c.data.startswith("r_"))
+def sel_rem(c):
+    if not is_admin(c.from_user.id):
+        bot.answer_callback_query(c.id, "⛔ Solo admin!")
         return
     
-    try:
-        admins = db.collection('admins').stream()
-        text = "👥 *Lista Admin:*\n\n"
-        
-        for admin in admins:
-            admin_id = admin.id
-            admin_data = admin.to_dict()
-            username = admin_data.get('username', 'N/A')
-            text += f"• ID: `{admin_id}` (@{username})\n"
-        
-        if text == "👥 *Lista Admin:*\n\n":
-            text += "_Nessun admin registrato_"
-        
-        markup = InlineKeyboardMarkup().row(InlineKeyboardButton("🔙 Indietro", callback_data="back_admin"))
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                              parse_mode='Markdown', reply_markup=markup)
-    except Exception as e:
-        bot.answer_callback_query(call.id, f"Errore: {e}")
+    if not db:
+        return
+    cat = c.data[2:]
+    ref = db.collection('menu').document('caldarelli')
+    prods = ref.get().to_dict()['categorie'][cat]
+    markup = InlineKeyboardMarkup()
+    for p in prods:
+        markup.add(InlineKeyboardButton(f"❌ {p['nome']} €{p['prezzo']}", 
+                  callback_data=f"d_{cat}|{p['nome']}"))
+    markup.add(InlineKeyboardButton("🔙 Indietro", callback_data="rem_prod"))
+    bot.send_message(c.message.chat.id, f"Rimuovi da *{cat}*:", parse_mode="Markdown", reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: call.data == "cancel_action")
-def cancel_action(call):
-    """Annulla azione"""
-    user_states.pop(call.from_user.id, None)
-    bot.answer_callback_query(call.id, "❌ Operazione annullata")
-    send_welcome(call.message) if hasattr(call.message, 'chat') else None
+@bot.callback_query_handler(func=lambda c: c.data.startswith("d_"))
+def do_del(c):
+    if not is_admin(c.from_user.id):
+        bot.answer_callback_query(c.id, "⛔ Solo admin!")
+        return
+    
+    if not db:
+        return
+    data = c.data[2:].split("|")
+    cat, name = data[0], data[1]
+    ref = db.collection('menu').document('caldarelli')
+    doc = ref.get()
+    data = doc.to_dict()
+    data['categorie'][cat] = [p for p in data['categorie'][cat] if p['nome'] != name]
+    ref.set(data)
+    bot.send_message(c.message.chat.id, f"✅ *{name}* rimosso!", parse_mode="Markdown", reply_markup=menu(c.from_user.id))
 
-# ========== WEBHOOK FLASK ==========
+@bot.callback_query_handler(func=lambda c: c.data == "list")
+def lst(c):
+    if not db:
+        return
+    ref = db.collection('menu').document('caldarelli')
+    doc = ref.get()
+    if not doc.exists:
+        bot.send_message(c.message.chat.id, "Menu vuoto.")
+        return
+    
+    cats = doc.to_dict()['categorie']
+    messages = []
+    current_msg = "📋 *MENU CALDARELLI*\n\n"
+    
+    for cat, items in cats.items():
+        cat_text = f"🍸 *{cat}*\n"
+        for i in items: 
+            cat_text += f"• {i['nome']} €{i['prezzo']:.2f}\n"
+        cat_text += "\n"
+        
+        if len(current_msg) + len(cat_text) > 3500:
+            messages.append(current_msg)
+            current_msg = cat_text
+        else:
+            current_msg += cat_text
+    
+    if current_msg:
+        messages.append(current_msg)
+    
+    for msg in messages:
+        bot.send_message(c.message.chat.id, msg, parse_mode="Markdown")
+    
+    bot.send_message(c.message.chat.id, "✅ Fine menu", reply_markup=menu(c.from_user.id))
+
+@bot.callback_query_handler(func=lambda c: c.data == "back")
+def back(c):
+    bot.send_message(c.message.chat.id, "Menu principale:", reply_markup=menu(c.from_user.id))
+
+# ========== WEBHOOK PER RENDER (AGGIUNTO) ==========
+
 @app.route("/")
 def index():
-    """Pagina principale"""
-    return """
-    <h1>🤖 Bot Caldarelli Online!</h1>
-    <p>Il bot è attivo e funzionante 24/7</p>
-    <br>
-    <a href='/setwebhook'><button style='padding:10px 20px;'>🔧 Imposta Webhook</button></a>
-    """, 200
+    return "<h1>🤖 Bot Caldarelli Online!</h1><p>Servizio attivo 24/7</p>", 200
 
 @app.route("/setwebhook")
 def set_webhook():
-    """Imposta webhook manualmente"""
     if not RENDER_URL:
-        return "❌ RENDER_URL non impostato!", 400
-    
+        return "❌ RENDER_URL non impostato", 400
     try:
         bot.remove_webhook()
-        webhook_url = f"{RENDER_URL}/{TOKEN}"
-        result = bot.set_webhook(url=webhook_url)
-        
-        if result:
-            return f"""
-            ✅ Webhook impostato!<br><br>
-            URL: {webhook_url}<br><br>
-            Il bot ora risponde su Telegram!
-            """
-        else:
-            return "❌ Errore impostazione webhook", 500
+        bot.set_webhook(url=f"{RENDER_URL}/{TOKEN}")
+        return f"✅ Webhook impostato: {RENDER_URL}/{TOKEN}", 200
     except Exception as e:
         return f"❌ Errore: {str(e)}", 500
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
-    """Endpoint Telegram"""
     try:
         update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
         bot.process_new_updates([update])
@@ -552,14 +413,16 @@ def webhook():
 
 # ========== AVVIO ==========
 if __name__ == "__main__":
-    # Auto-setup webhook
+    print("✅ Bot avviato su Render!")
+    
+    # Imposta webhook automatico se possibile
     if RENDER_URL:
         try:
             bot.remove_webhook()
             bot.set_webhook(url=f"{RENDER_URL}/{TOKEN}")
-            print(f"✅ Webhook: {RENDER_URL}/{TOKEN}")
-        except Exception as e:
-            print(f"⚠️ Webhook manuale richiesto: /setwebhook")
+            print(f"🌐 Webhook: {RENDER_URL}/{TOKEN}")
+        except:
+            print("🔧 Visita /setwebhook per impostare manualmente")
     
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
