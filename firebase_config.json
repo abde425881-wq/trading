@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "sito-caldarelli",
+  "private_key_id": "0be98e774ad7ebe8d056c4bd85281b88b671c1db",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDnUAZZFiAWLO8D\nDvRbPUAyfOGwvyCV/bJ4y9eHXwaZONCkzBHai74AYt2Y6CRtyikbtrocjFkJsN+1\nADI+TEHjh6uaLn3n/TxCfnX1AHnrkD+drKsQlp7pauN6ZeYLBtCghT+MeU7cypIr\nUs8kzd0Q08Kga3l9JcSSaipAeLk3GWBh9W2f1mcHCv201k75R4Tz6v9nTFk9UvGp\no8oYt4jnCMpgnzq2TPlDmYDTWNv3lO662qyopoDsY5aEbigzAOXCvBMcbdEhoQEd\nxOKW3R2BLYuhi4/5HPLE077Rhi8ALseThBs8HYRHaUaJNuQ/3Swj/IKCkL/yRs5C\nYRw0ZsnTAgMBAAECggEAWksYN0VWQCHJKRH42/bUbQDnnrV09Gfkd5fmqb6z1jLh\n6zqHy55aDE+Lfgk8Uykjk+Bn1QYKKajEIqURd9UPsVA/8b8tQdZN5Az2Ya2OaiBU\nXOnOmvqYzLf/VUOaoXpHDSoGjQC7gp+GoGfCWXUM0uk+o51gfrQ0AA12MdWOQ02j\n/9osrmJPkrSgJ9hskBK6eVmr+59fNknPFe5/fe79caZkUc+7zcYRmsz9NIAbWYVO\nCQbaF+oqbbz5cezVZS6g4V5UoUoLSwSD8jZxwbkrrlSg7v0/Ntd/4Ogh2NzQ/yP2\nIurD3MJMVF7mpedGJNrWuJu+fpu74CJQFlha8cz2RQKBgQD8gw1SS1pN9HgfSMLJ\nfq2BmAaRpw2JY0whA0ZSJiR3olauep6Ju92TaPw8+6Fq8t7ZtCxCM8+oQAI2DMyK\n5Qo8k5DNZWKRjB/IIxu6Iybd5PHAcE7tRbwD7sBvyoWtPwbn/8yfs8BAwj/RmBhw\nS3gEqJVTY5a8ax+2UVk6leypPwKBgQDqggGk1VuhlKkgHMQodyGezzb08L/96+ss\nIo8l9QqV24pd+0lmXf/eKuIcrQydv2mPK9kMfU/8WoznnZ6W1cBId9oDBKpOaJS7\nNLTgV02fdz7EovzhQzhHKFTgQG36ZHUyzNTuDPu9vz1FKUITquUizet5NUeSbARs\nMAJo4UTGbQKBgGctuZTF24l8+lR2K7mfvI/2qcB8TSi1XVcj+mj40u/bcqXqzrsi\n+6APRvo4K7YCtZKpb2hBuXlbZkvloPKkMjGcbo+u/L7STe4+gkbltCz5LtteSLHl\nS7UjqphDXanz1gOYX2lmTolnliIzjtDb1Ze5twKS7/Xfo96gkOBCgKiLAoGBAM8J\noHHqfE+XdAmJ3BTtuJ0AzMBLnPWNR79bc45LXOEZRnva0t6xtqhqq94tWaobyBJC\n4AmKyQc+2o/SNKVuaaiRR8TKZaF763OsANTfvwQ+vwfT7fbi5djM3sJtn6sk7eO/\nu22/wLGxGWLqHhBHHK0xp+cHBv1aqDzr1fTKjXGxAoGBAKqzBovBOax1/1sU3/Uo\nJH2TclkdsvNmKUGEltvDbF7OIfyYPC//gcjnIvJRWe7as5MMP3XbjMF0I/mRi8cj\nsz/KDhBHnt1wXcBdpA72WPfUp0llNM72wITpviLWeAmyBPMIc8IVop8epjIFmIcG\nWLmfXrHmdRxKi750pdsfmt1r\n-----END PRIVATE KEY-----\n",
+  "client_email": "firebase-adminsdk-fbsvc@sito-caldarelli.iam.gserviceaccount.com",
+  "client_id": "116837361106748894711",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40sito-caldarelli.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
